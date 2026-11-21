@@ -24,7 +24,7 @@
 
 ## 轻量架构与性能设计
 
-本插件不依赖任何第三方 npm 包，仅使用 Antigravity 2.0 内置运行时自带的 **`node:sqlite`**（Node `>= 22.5` / 内置 Electron Helper `v24.22.0`）与 **`sidecar_sdk`**。
+本插件不依赖任何第三方 npm 包，仅使用 Antigravity 2.0 内置运行时自带的 **`node:sqlite`**（Node `>= 22.5` / 内置 Electron Helper）与 **`sidecar_sdk`**。
 
 | 设计维度 | 实现机制 | 实测开销 |
 | :--- | :--- | :--- |
@@ -47,26 +47,34 @@
 
 ## 快速安装（人工使用）
 
-### 方式一：一键脚本安装（推荐，自动完成校验与原子替换）
+> [!TIP]
+> 为避免 Antigravity 热加载监听器在目录尚未拷完时抢先扫描、启动 Sidecar 并锁定文件句柄（Windows 下易报 `Permission denied`），请使用下方的一键脚本进行**盘外暂存 + 原子替换**，**不要直接**把仓库 `git clone` 进 `~/.gemini/config/plugins/token-meter`。
+
+### Windows（PowerShell，无需 Git / 无需 Bash）
+
+```powershell
+irm https://raw.githubusercontent.com/AnTengye/agy-token-meter/main/install.ps1 | iex
+```
+
+### macOS / Linux（Bash / Zsh）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AnTengye/agy-token-meter/main/install.sh | bash
 ```
 
-### 方式二：克隆仓库后本地安装（支持软链开发模式）
+### 跨平台本地仓库安装（支持二次开发软链 `--link`）
 
 ```bash
 git clone https://github.com/AnTengye/agy-token-meter.git
 cd agy-token-meter
-./install.sh          # 原子拷贝安装到 ~/.gemini/config/plugins/token-meter
-# 或开发调试使用软链：
-# ./install.sh install --link
-```
 
-### 方式三：极简直接克隆安装
+# 任选其一：
+node install.mjs          # Windows / macOS / Linux 通用（Node >= 22.5）
+./install.sh              # macOS / Linux / Git Bash
+.\install.ps1             # Windows PowerShell
 
-```bash
-git clone https://github.com/AnTengye/agy-token-meter.git ~/.gemini/config/plugins/token-meter
+# 开发模式（创建软链/联接目录而非拷贝）：
+# node install.mjs install --link
 ```
 
 ### 启用与打开方式
@@ -79,52 +87,52 @@ git clone https://github.com/AnTengye/agy-token-meter.git ~/.gemini/config/plugi
 
 ## AI Agent 自主安装方案
 
-如果你希望让 Antigravity、Codex 或 Claude Code 等 AI Agent 自动完成安装、体检并为你打开面板，可直接使用以下方案。
+如果你希望让 Antigravity、Codex 或 Claude Code 等 AI Agent 自动完成安装、体检并为你打开面板，可直接使用以下方案（**已按 Windows / macOS / Linux 做好分流与原子锁隔离，1 条命令即可 15 秒内一次完成**）。
 
 ### 1. 直接复制给 AI Agent 的提示词
 
 ```text
 请帮我安装并启用开源 Antigravity 插件 agy-token-meter（https://github.com/AnTengye/agy-token-meter）：
-1. 先检查 ~/.gemini/config/plugins/token-meter 是否已存在避免冲突；
-2. 执行 `curl -fsSL https://raw.githubusercontent.com/AnTengye/agy-token-meter/main/install.sh | bash` 完成原子安装；
-3. 严禁手动修改 ~/.gemini/config/config.json 或调用受限写状态 RPC；
-4. 运行 `bash ~/.gemini/config/plugins/token-meter/install.sh doctor` 验证引擎只读测试与 Sidecar 状态；
-5. 最后提供 [Token Meter](customization://token-meter) 与（当 Sidecar 已监听时）[Token Meter](sidecar://token-meter/meter/) 链接。
+1. 按当前操作系统选择原生安装命令（不要直接在 ~/.gemini/config/plugins/ 下建临时目录或直接 clone）：
+   - Windows (PowerShell): `irm https://raw.githubusercontent.com/AnTengye/agy-token-meter/main/install.ps1 | iex`
+   - macOS / Linux: `curl -fsSL https://raw.githubusercontent.com/AnTengye/agy-token-meter/main/install.sh | bash`
+2. 严禁手动修改 ~/.gemini/config/config.json 或调用受限写状态 RPC；
+3. 安装脚本会自动执行 doctor 体检并输出 Sidecar 监听状态；再通过只读检查确认插件已加载（disabled: false）；
+4. 最后向我返回 [Token Meter](customization://token-meter) 与（若 Sidecar 已监听）[Token Meter](sidecar://token-meter/meter/) 链接。
 ```
 
 ### 2. AI Agent 标准化执行规约（供 Agent 自读）
 
 ```markdown
-1. 目标与前置检查：
-   - 目标安装路径：`~/.gemini/config/plugins/token-meter`（可通过环境变量 `AGY_PLUGIN_DIR` 覆盖）。
-   - 检查是否已存在同名插件或冲突；若已存在，询问用户或直接覆盖更新同一插件目录。
-2. 执行幂等安装：
-   - 运行：`curl -fsSL https://raw.githubusercontent.com/AnTengye/agy-token-meter/main/install.sh | bash`
-   - 若网络无法直连 GitHub Raw，可改用：`git clone --depth 1 https://github.com/AnTengye/agy-token-meter.git /tmp/agy-token-meter && bash /tmp/agy-token-meter/install.sh && rm -rf /tmp/agy-token-meter`
-3. 强制安全护栏：
-   - 禁止手工读写或覆盖 `~/.gemini/config/config.json`。
-   - 禁止调用 `JetboxWriteState` / `InstallCustomization` / `DeletePlugin` 等受限 RPC。
-   - 禁止将该插件配置为对话 Hook，保持纯只读 Sidecar 形态。
-4. 自检与验收：
-   - 执行 `bash ~/.gemini/config/plugins/token-meter/install.sh doctor`，确认以下项均通过：
-     a) 必需文件完整（`plugin.json`, `sidecars/meter/{sidecar.json,engine.mjs,main.mjs,index.html,styles.css,app.js}`）；
-     b) `node:sqlite` 只读烟雾测试成功（`--overview today`）；
-     c) 如插件已激活，验证 `~/.gemini/antigravity/sidecar_data/token-meter/meter/logs/sidecar.log` 中的本地端口可响应 `GET /`。
-   - 若本机启用了 `GetAllPlugins` RPC，可执行校验确认 `name: "token-meter"` 且 `disabled: false`。
-5. 结果交付：
-   - 向用户输出管理页链接：`[Token Meter](customization://token-meter)`
-   - 若确认 Sidecar 已运行，附上侧边栏直达链接：`[Token Meter](sidecar://token-meter/meter/)`
+1. 目标路径与护栏：
+   - 目标路径：`~/.gemini/config/plugins/token-meter`（或环境变量 `AGY_PLUGIN_DIR`）。
+   - 禁止手工修改 `~/.gemini/config/config.json`，禁止调用 `JetboxWriteState` / `InstallCustomization` / `DeletePlugin`。
+   - 禁止在 `~/.gemini/config/plugins/` 目录内创建任何 `.tmp` / 暂存目录或直接 `git clone`，以免触发宿主监听器抢先加载并锁住目录句柄；所有官方安装脚本均已将暂存区隔离至 `~/.gemini/config/.token-meter-stage-*`。
+2. 按操作系统执行单条原子安装（脚本内已含 `doctor` 自动体检，无需重复克隆仓库或绕道寻找 Git Bash）：
+   - Windows（PowerShell）：
+     `irm https://raw.githubusercontent.com/AnTengye/agy-token-meter/main/install.ps1 | iex`
+   - macOS / Linux：
+     `curl -fsSL https://raw.githubusercontent.com/AnTengye/agy-token-meter/main/install.sh | bash`
+   - 如离线/无法访问 GitHub Raw，可先克隆到系统临时目录后执行 `node <tmp>/install.mjs`（Windows / macOS / Linux 通用）。
+3. 验收标准：
+   - 安装脚本末尾的 `doctor` 输出：必需文件完整、只读引擎 `--overview today` 通过、且已打印 `Sidecar HTTP server is LIVE`（或等待 1-2 秒宿主热加载后再次运行 `doctor` 复检）。
+   - 若当前环境存在 `GetAllPlugins` RPC，只读过滤确认 `name == "token-meter"` 且 `disabled == false`。
+4. 交付格式：
+   - 管理页链接：`[Token Meter](customization://token-meter)`
+   - 若 Sidecar 正在监听，附上直达面板链接：`[Token Meter](sidecar://token-meter/meter/)`
 ```
 
 ---
 
 ## 离线诊断、运维与卸载
 
-安装后可通过安装脚本或 Node CLI 直接执行离线检查（只读，不修改任何会话库）：
+安装后自带三种等价脚本，在任意平台均可直接调用（只读，不修改任何会话库）：
 
 ```bash
 # 健康检查（文件完整性、node:sqlite 兼容性、引擎只读测试、Sidecar 端口检测）
-bash ~/.gemini/config/plugins/token-meter/install.sh doctor
+node ~/.gemini/config/plugins/token-meter/install.mjs doctor
+# macOS / Linux 也可用: bash ~/.gemini/config/plugins/token-meter/install.sh doctor
+# Windows 也可用:       powershell -File "$HOME\.gemini\config\plugins\token-meter\install.ps1" -Action doctor
 
 # 检查指定会话（含 Swarm / Teamwork 全树汇总与冷/热缓存耗时）
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --inspect <conversationId>
@@ -133,8 +141,8 @@ node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --inspect <con
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --overview today
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --overview 24h
 
-# 卸载插件
-bash ~/.gemini/config/plugins/token-meter/install.sh uninstall
+# 卸载插件（自动先触发宿主优雅释放 Sidecar 句柄再清理目录）
+node ~/.gemini/config/plugins/token-meter/install.mjs uninstall
 ```
 
 > 若系统全局未安装 Node `>= 22.5`，在 macOS 上可直接用 Antigravity 内置运行时执行上述命令：
@@ -147,7 +155,9 @@ bash ~/.gemini/config/plugins/token-meter/install.sh uninstall
 ```text
 agy-token-meter/
 ├── plugin.json                 # Antigravity 2.0 插件清单
-├── install.sh                  # 一键安装 / 卸载 / 体检脚本
+├── install.sh                  # macOS / Linux / Git Bash 一键安装与体检脚本
+├── install.ps1                 # Windows PowerShell 原生一键安装与体检脚本
+├── install.mjs                 # 跨平台零依赖 Node 安装 / 卸载 / 体检脚本
 ├── LICENSE                     # MIT 开源协议
 ├── README.md
 ├── assets/

@@ -19,11 +19,11 @@ description: 查看当前会话 Token 消耗、Prompt 缓存命中率、Swarm / 
 
 ## 2. 离线 CLI 诊断与健康检查
 
-可直接对指定会话或全局窗口运行单次统计（不启动 HTTP 服务）：
+可直接对指定会话或全局窗口运行单次统计（不启动 HTTP 服务），支持跨平台 Node 入口：
 
 ```bash
+node ~/.gemini/config/plugins/token-meter/install.mjs doctor
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --inspect <conversationId>
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --overview today
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --overview 24h
-bash ~/.gemini/config/plugins/token-meter/install.sh doctor
 ```

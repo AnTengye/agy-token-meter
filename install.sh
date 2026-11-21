@@ -37,15 +37,16 @@ for arg in "$@"; do
       exit 0
       ;;
     *)
-      echo "[error] Unknown argument: $arg" >&2
+      printf '[token-meter][error] Unknown argument: %s\n' "$arg" >&2
       usage >&2
       exit 2
       ;;
   esac
 done
 
+# All diagnostic logs go to stderr so functions like fetch_source can safely return paths on stdout.
 log() {
-  printf '[token-meter] %s\n' "$*"
+  printf '[token-meter] %s\n' "$*" >&2
 }
 
 warn() {
@@ -75,9 +76,17 @@ detect_local_source() {
 }
 
 TMP_DIR=""
+STAGE_DIR=""
+DOCTOR_TMP=""
 cleanup() {
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
+  fi
+  if [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ]; then
+    rm -rf "$STAGE_DIR"
+  fi
+  if [ -n "$DOCTOR_TMP" ] && [ -f "$DOCTOR_TMP" ]; then
+    rm -f "$DOCTOR_TMP"
   fi
 }
 trap cleanup EXIT
@@ -134,6 +143,23 @@ run_node_main() {
   fi
 }
 
+move_existing_with_unlock() {
+  local target="$1"
+  local backup="$2"
+  # Remove manifests first so Antigravity stops the running Sidecar and releases directory handles (especially on Windows).
+  rm -f "$target/plugin.json" "$target/sidecars/meter/sidecar.json" 2>/dev/null || true
+
+  local attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    if mv "$target" "$backup" 2>/dev/null; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.5
+  done
+  return 1
+}
+
 do_install() {
   local src_dir=""
   if src_dir="$(detect_local_source)"; then
@@ -143,42 +169,56 @@ do_install() {
     src_dir="$(fetch_source)"
   fi
 
-  local parent_dir
-  parent_dir="$(dirname "$TARGET_DIR")"
-  mkdir -p "$parent_dir"
+  local plugins_dir
+  plugins_dir="$(dirname "$TARGET_DIR")"
+  # Keep staging/backup on the same volume but outside plugins/ so Antigravity's watcher never pre-loads a partial directory.
+  local stage_root
+  stage_root="$(dirname "$plugins_dir")"
+  mkdir -p "$plugins_dir" "$stage_root"
 
   if [ "$LINK_MODE" -eq 1 ]; then
-    if [ -e "$TARGET_DIR" ] || [ -L "$TARGET_DIR" ]; then
-      rm -rf "$TARGET_DIR"
+    if [ -L "$TARGET_DIR" ]; then
+      rm -f "$TARGET_DIR"
+    elif [ -d "$TARGET_DIR" ]; then
+      local backup_dir="$stage_root/.token-meter-backup.$$"
+      rm -rf "$backup_dir"
+      move_existing_with_unlock "$TARGET_DIR" "$backup_dir" || die "Failed to replace existing plugin directory at $TARGET_DIR (directory in use)."
+      rm -rf "$backup_dir"
     fi
     ln -s "$src_dir" "$TARGET_DIR"
     log "Linked $TARGET_DIR -> $src_dir"
   else
-    local stage_dir="${TARGET_DIR}.tmp.$$"
-    local backup_dir="${TARGET_DIR}.bak.$$"
-    rm -rf "$stage_dir" "$backup_dir"
-    mkdir -p "$stage_dir"
+    STAGE_DIR="$stage_root/.token-meter-stage.$$"
+    local backup_dir="$stage_root/.token-meter-backup.$$"
+    rm -rf "$STAGE_DIR" "$backup_dir"
+    mkdir -p "$STAGE_DIR"
 
-    cp "$src_dir/plugin.json" "$stage_dir/"
-    [ -f "$src_dir/README.md" ] && cp "$src_dir/README.md" "$stage_dir/"
-    [ -f "$src_dir/LICENSE" ] && cp "$src_dir/LICENSE" "$stage_dir/"
-    [ -f "$src_dir/install.sh" ] && cp "$src_dir/install.sh" "$stage_dir/" && chmod +x "$stage_dir/install.sh"
-    cp -R "$src_dir/assets" "$stage_dir/"
-    cp -R "$src_dir/skills" "$stage_dir/"
-    cp -R "$src_dir/sidecars" "$stage_dir/"
-    find "$stage_dir" -name ".DS_Store" -delete
+    cp "$src_dir/plugin.json" "$STAGE_DIR/"
+    [ -f "$src_dir/README.md" ] && cp "$src_dir/README.md" "$STAGE_DIR/"
+    [ -f "$src_dir/LICENSE" ] && cp "$src_dir/LICENSE" "$STAGE_DIR/"
+    if [ -f "$src_dir/install.sh" ]; then
+      cp "$src_dir/install.sh" "$STAGE_DIR/"
+      chmod +x "$STAGE_DIR/install.sh"
+    fi
+    [ -f "$src_dir/install.ps1" ] && cp "$src_dir/install.ps1" "$STAGE_DIR/"
+    [ -f "$src_dir/install.mjs" ] && cp "$src_dir/install.mjs" "$STAGE_DIR/"
+    cp -R "$src_dir/assets" "$STAGE_DIR/"
+    cp -R "$src_dir/skills" "$STAGE_DIR/"
+    cp -R "$src_dir/sidecars" "$STAGE_DIR/"
+    find "$STAGE_DIR" -name ".DS_Store" -delete
 
     if [ -L "$TARGET_DIR" ]; then
       rm -f "$TARGET_DIR"
     elif [ -d "$TARGET_DIR" ]; then
-      mv "$TARGET_DIR" "$backup_dir"
+      move_existing_with_unlock "$TARGET_DIR" "$backup_dir" || die "Failed to move existing $TARGET_DIR to backup (directory in use)."
     fi
 
-    if mv "$stage_dir" "$TARGET_DIR"; then
+    if mv "$STAGE_DIR" "$TARGET_DIR"; then
+      STAGE_DIR=""
       rm -rf "$backup_dir"
     else
-      if [ -d "$backup_dir" ]; then
-        mv "$backup_dir" "$TARGET_DIR"
+      if [ -d "$backup_dir" ] && [ ! -e "$TARGET_DIR" ]; then
+        mv "$backup_dir" "$TARGET_DIR" || true
       fi
       die "Failed to move staged plugin into $TARGET_DIR"
     fi
@@ -191,8 +231,19 @@ do_install() {
 
 do_uninstall() {
   [ -n "$TARGET_DIR" ] && [ "$TARGET_DIR" != "/" ] || die "Unsafe TARGET_DIR: $TARGET_DIR"
-  if [ -e "$TARGET_DIR" ] || [ -L "$TARGET_DIR" ]; then
-    rm -rf "$TARGET_DIR"
+  if [ -L "$TARGET_DIR" ]; then
+    rm -f "$TARGET_DIR"
+    log "Removed symlink $TARGET_DIR"
+  elif [ -d "$TARGET_DIR" ]; then
+    local stage_root
+    stage_root="$(dirname "$(dirname "$TARGET_DIR")")"
+    local backup_dir="$stage_root/.token-meter-uninstall.$$"
+    mkdir -p "$stage_root"
+    if move_existing_with_unlock "$TARGET_DIR" "$backup_dir"; then
+      rm -rf "$backup_dir"
+    else
+      rm -rf "$TARGET_DIR"
+    fi
     log "Removed $TARGET_DIR"
   else
     log "Nothing to remove ($TARGET_DIR does not exist)."
@@ -232,16 +283,18 @@ do_doctor() {
     local kind="${runner%%:*}"
     local bin="${runner#*:}"
     log "Node SQLite runtime OK ($kind): $bin"
-    if ANTIGRAVITY_APP_DATA_DIR="$APP_DATA_DIR" run_node_main "$runner" "$TARGET_DIR/sidecars/meter/main.mjs" --overview today >/tmp/agy-tm-doctor.$$ 2>&1; then
+    DOCTOR_TMP="$(mktemp "${TMPDIR:-/tmp}/agy-tm-doctor.XXXXXX")"
+    if ANTIGRAVITY_APP_DATA_DIR="$APP_DATA_DIR" run_node_main "$runner" "$TARGET_DIR/sidecars/meter/main.mjs" --overview today >"$DOCTOR_TMP" 2>&1; then
       local summary
-      summary="$(tr -d '\n' < /tmp/agy-tm-doctor.$$ | sed -n 's/.*"totals":[[:space:]]*\({[^}]*}\).*/\1/p')"
+      summary="$(tr -d '\n' < "$DOCTOR_TMP" | sed -n 's/.*"totals":[[:space:]]*\({[^}]*}\).*/\1/p')"
       log "Engine read-only test OK: ${summary:-passed}"
     else
       warn "Engine read-only test failed:"
-      cat /tmp/agy-tm-doctor.$$ >&2 || true
+      cat "$DOCTOR_TMP" >&2 || true
       ok=1
     fi
-    rm -f /tmp/agy-tm-doctor.$$
+    rm -f "$DOCTOR_TMP"
+    DOCTOR_TMP=""
   else
     warn "No Node.js >= 22.5 (with node:sqlite) found in PATH or Antigravity Helper."
     ok=1
