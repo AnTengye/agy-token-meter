@@ -1,0 +1,21 @@
+{
+  "name": "token-meter",
+  "displayName": "Token Meter",
+  "version": "0.1.0",
+  "description": "轻量原生 Token 消耗与 Prompt 缓存命中率监控面板：优先展示当前会话，自动聚合 Swarm / Teamwork 多代理会话树，并支持按需查看今日与近 24h 总消耗。",
+  "logo": "assets/logo.svg",
+  "author": {
+    "name": "AnTengye",
+    "url": "https://github.com/AnTengye"
+  },
+  "homepage": "https://github.com/AnTengye/agy-token-meter",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AnTengye/agy-token-meter.git"
+  },
+  "suggestedPrompts": [
+    "打开 Token Meter 面板查看当前会话的 Token 与缓存命中率",
+    "分析当前会话或 Swarm / Teamwork 树的缓存命中情况",
+    "统计今日或近 24 小时所有会话的 Token 总消耗"
+  ]
+}

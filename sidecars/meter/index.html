@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'none'; child-src 'none'">
+  <title>Token Meter</title>
+  <script src="/preload.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="topbar">
+      <div class="topbar-left">
+        <span id="mode-badge" class="badge badge-neutral">单会话</span>
+        <span id="model-pill" class="model-pill" title="当前主力模型">-</span>
+      </div>
+      <div class="topbar-right">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="session" role="tab" aria-selected="true">当前</button>
+          <button class="tab" data-tab="overview" role="tab" aria-selected="false">总览</button>
+        </div>
+        <button id="refresh-btn" class="icon-btn" title="立即刷新" aria-label="刷新">↻</button>
+      </div>
+    </header>
+
+    <main id="view-session" class="view">
+      <div id="session-empty" class="empty hidden">
+        <div class="empty-title">等待会话数据</div>
+        <div class="empty-desc" id="session-empty-desc">发起首轮对话后将实时显示 Token 消耗与缓存命中率。</div>
+      </div>
+
+      <div id="session-content" class="stack hidden">
+        <div class="title-row">
+          <div id="session-title" class="session-title" title=""></div>
+          <div id="session-meta" class="session-meta"></div>
+        </div>
+
+        <!-- Swarm / Teamwork 双栏对比 -->
+        <section id="family-compare" class="compare-grid hidden">
+          <div class="card card-accent">
+            <div class="card-head">
+              <span class="card-label">当前节点</span>
+              <span id="cmp-self-calls" class="card-sub">0 calls</span>
+            </div>
+            <div id="cmp-self-total" class="big-num">0</div>
+            <div class="hit-row">
+              <span>缓存命中</span>
+              <strong id="cmp-self-hit">0%</strong>
+            </div>
+            <div class="bar-track"><div id="cmp-self-bar" class="bar-fill"></div></div>
+          </div>
+
+          <div class="card card-family">
+            <div class="card-head">
+              <span id="cmp-family-label" class="card-label">整组汇总</span>
+              <span id="cmp-family-nodes" class="card-sub">0 节点</span>
+            </div>
+            <div id="cmp-family-total" class="big-num">0</div>
+            <div class="hit-row">
+              <span>整组命中</span>
+              <strong id="cmp-family-hit">0%</strong>
+            </div>
+            <div class="bar-track"><div id="cmp-family-bar" class="bar-fill"></div></div>
+          </div>
+        </section>
+
+        <!-- 单会话核心 KPI（非树模式或单会话节点详情） -->
+        <section id="single-hero" class="card">
+          <div class="hero-top">
+            <div>
+              <div class="card-label">总消耗 Token</div>
+              <div id="hero-total" class="big-num">0</div>
+            </div>
+            <div class="hero-hit-box">
+              <div class="card-label">缓存命中率</div>
+              <div id="hero-hit" class="big-hit">0%</div>
+            </div>
+          </div>
+          <div class="bar-track bar-lg"><div id="hero-bar" class="bar-fill"></div></div>
+        </section>
+
+        <!-- 详细拆分指标 -->
+        <section class="kpi-grid">
+          <div class="kpi">
+            <div class="kpi-label">总输入 / 缓存读取</div>
+            <div id="kpi-in" class="kpi-val">0</div>
+            <div id="kpi-in-sub" class="kpi-sub">未命中 0 · 命中 0</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">输出 (含思考)</div>
+            <div id="kpi-out" class="kpi-val">0</div>
+            <div id="kpi-out-sub" class="kpi-sub">思考 0 · 文本 0</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">最新上下文窗口</div>
+            <div id="kpi-ctx" class="kpi-val">0</div>
+            <div id="kpi-ctx-sub" class="kpi-sub">上轮命中 0%</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">调用 / 压缩</div>
+            <div id="kpi-calls" class="kpi-val">0</div>
+            <div id="kpi-calls-sub" class="kpi-sub">压缩 0 次</div>
+          </div>
+        </section>
+
+        <!-- 整组扩展详情（仅多代理模式显示） -->
+        <section id="family-details" class="card hidden">
+          <div class="section-head">
+            <span>全组 Token 拆分</span>
+            <span id="fam-detail-calls" class="muted"></span>
+          </div>
+          <div class="mini-stats">
+            <div><span class="muted">全组输入：</span><strong id="fam-in">0</strong></div>
+            <div><span class="muted">未命中：</span><strong id="fam-unc">0</strong></div>
+            <div><span class="muted">缓存读取：</span><strong id="fam-cr">0</strong></div>
+            <div><span class="muted">全组输出：</span><strong id="fam-out">0</strong></div>
+          </div>
+          <div id="depth-wrap" class="sub-block hidden">
+            <div class="sub-title">按嵌套深度</div>
+            <div id="depth-list" class="depth-list"></div>
+          </div>
+          <div id="family-models-wrap" class="sub-block hidden">
+            <div class="sub-title">全组模型分布</div>
+            <div id="family-models" class="model-list"></div>
+          </div>
+        </section>
+
+        <!-- 单会话多模型分布 -->
+        <section id="self-models-card" class="card hidden">
+          <div class="section-head"><span>当前会话模型分布</span></div>
+          <div id="self-models" class="model-list"></div>
+        </section>
+
+        <!-- 逐轮缓存条形图 -->
+        <section id="turns-card" class="card">
+          <div class="section-head">
+            <span>最近调用缓存分布</span>
+            <span id="turns-legend" class="legend">
+              <i class="dot dot-hit"></i>命中
+              <i class="dot dot-miss"></i>未命中
+              <i class="dot dot-zero"></i>0命中
+            </span>
+          </div>
+          <div id="turns-chart" class="turns-chart"></div>
+          <div id="turn-tooltip" class="turn-tooltip">悬停柱条查看单轮明细</div>
+        </section>
+
+        <!-- Swarm / Teamwork 成员列表 -->
+        <section id="members-card" class="card hidden">
+          <div class="section-head">
+            <span id="members-title">成员消耗榜</span>
+            <span id="members-hint" class="muted">点击跳转会话</span>
+          </div>
+          <div id="members-list" class="members-list"></div>
+          <div id="members-omitted" class="omitted hidden"></div>
+        </section>
+      </div>
+    </main>
+
+    <main id="view-overview" class="view hidden">
+      <div class="overview-bar">
+        <div class="seg">
+          <button class="seg-btn active" data-range="today">今日</button>
+          <button class="seg-btn" data-range="24h">近 24h</button>
+        </div>
+        <span id="overview-cost" class="muted"></span>
+      </div>
+
+      <div id="overview-loading" class="empty hidden">
+        <div class="empty-title">正在汇总本地会话...</div>
+      </div>
+
+      <div id="overview-content" class="stack hidden">
+        <section class="card">
+          <div class="hero-top">
+            <div>
+              <div class="card-label">全量总消耗 Token</div>
+              <div id="ov-total" class="big-num">0</div>
+            </div>
+            <div class="hero-hit-box">
+              <div class="card-label">综合缓存命中</div>
+              <div id="ov-hit" class="big-hit">0%</div>
+            </div>
+          </div>
+          <div class="bar-track bar-lg"><div id="ov-bar" class="bar-fill"></div></div>
+          <div class="mini-stats" style="margin-top:8px">
+            <div><span class="muted">会话/根树：</span><strong id="ov-sess">0</strong></div>
+            <div><span class="muted">调用/压缩：</span><strong id="ov-calls">0</strong></div>
+            <div><span class="muted">缓存读取：</span><strong id="ov-cr">0</strong></div>
+            <div><span class="muted">未命中输入：</span><strong id="ov-unc">0</strong></div>
+            <div><span class="muted">总输出：</span><strong id="ov-out">0</strong></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-head"><span>按模型汇总</span></div>
+          <div id="ov-models" class="model-list"></div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <span>根会话消耗 Top 50</span>
+            <span class="muted">点击跳转</span>
+          </div>
+          <div id="ov-roots" class="members-list"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

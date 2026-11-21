@@ -1,0 +1,21 @@
+{
+  "command": "node",
+  "args": ["main.mjs"],
+  "restart_policy": "always",
+  "display_name": "Token Meter",
+  "description": "Real-time token usage and prompt cache hit rate monitor for the current conversation, Swarm/Teamwork trees, and on-demand daily overview.",
+  "has_web_ui": true,
+  "agent_permissions": {
+    "allows_user_interactions": false
+  },
+  "ui_config": {
+    "display_name": "Token Meter",
+    "views": [
+      {
+        "path": "/",
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
+        "title": "Token Meter"
+      }
+    ]
+  }
+}
