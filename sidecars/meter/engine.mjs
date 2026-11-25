@@ -19,11 +19,23 @@ const KNOWN_MODELS = new Map([
   [1403, 'claude-sonnet-5-5-low'],
 ]);
 
-const CONV_CACHE_LIMIT = 600;
+const DEFAULT_CONV_CACHE_LIMIT = 2000;
 const RECENT_TURNS_LIMIT = 40;
 const OVERVIEW_TTL_MS = 30_000;
+const HOT_WINDOW_MS = 25 * 3600 * 1000;
 const MAX_RETURNED_MEMBERS = 40;
 const ACTIVE_WINDOW_SEC = 300;
+
+function parsePositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const trimmed = String(raw).trim();
+  if (!/^\d+$/.test(trimmed)) return fallback;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export const CONV_CACHE_LIMIT = parsePositiveIntEnv('TOKEN_METER_CACHE_LIMIT', DEFAULT_CONV_CACHE_LIMIT);
 
 export function getAppDataDir() {
   const candidates = [
@@ -433,10 +445,27 @@ export class TokenMeterEngine {
   #brainDir;
   #summaryDbPath;
   #modelNames;
+  #convCacheLimit;
   #convCache = new Map(); // cid -> { sig, dbSize, accum, snapshot }
   #summaryCache = { sig: null, metaMap: new Map(), childrenMap: new Map() };
   #swarmCache = new Map(); // rootId -> { mtimeMs, data }
   #overviewCache = new Map(); // range -> { ts, data }
+  #convDirScan = {
+    initialized: false,
+    dirMtimeMs: -1,
+    dbMtimeIndex: new Map(),
+    walSet: new Set(),
+    unindexedSet: new Set(),
+    hotSet: new Set(),
+  };
+  #lastOverviewScanStats = {
+    dirChanged: false,
+    readdirCalls: 0,
+    statCalls: 0,
+    totalIndexed: 0,
+    hotSetSize: 0,
+    candidateCount: 0,
+  };
 
   constructor(appDataDir = getAppDataDir()) {
     this.#appDataDir = appDataDir;
@@ -444,12 +473,25 @@ export class TokenMeterEngine {
     this.#brainDir = join(appDataDir, 'brain');
     this.#summaryDbPath = join(appDataDir, 'conversation_summaries.db');
     this.#modelNames = new Map(KNOWN_MODELS);
+    this.#convCacheLimit = parsePositiveIntEnv('TOKEN_METER_CACHE_LIMIT', DEFAULT_CONV_CACHE_LIMIT);
+  }
+
+  get cacheLimit() {
+    return this.#convCacheLimit;
+  }
+
+  getOverviewScanStats() {
+    return {
+      ...this.#lastOverviewScanStats,
+      totalIndexed: this.#convDirScan.dbMtimeIndex.size,
+      hotSetSize: this.#convDirScan.hotSet.size,
+    };
   }
 
   #touchConvCache(cid, entry) {
     if (this.#convCache.has(cid)) {
       this.#convCache.delete(cid);
-    } else if (this.#convCache.size >= CONV_CACHE_LIMIT) {
+    } else if (this.#convCache.size >= this.#convCacheLimit) {
       const oldest = this.#convCache.keys().next().value;
       if (oldest !== undefined) this.#convCache.delete(oldest);
     }
@@ -462,7 +504,17 @@ export class TokenMeterEngine {
     const sigInfo = getDbSignature(dbPath);
     if (!sigInfo) {
       this.#convCache.delete(cid);
+      this.#convDirScan.dbMtimeIndex.delete(cid);
+      this.#convDirScan.hotSet.delete(cid);
+      this.#convDirScan.unindexedSet.delete(cid);
       return null;
+    }
+
+    this.#convDirScan.dbMtimeIndex.set(cid, sigInfo.latestMtimeMs);
+    if (sigInfo.walSize > 0 || sigInfo.latestMtimeMs >= Date.now() - HOT_WINDOW_MS) {
+      this.#convDirScan.hotSet.add(cid);
+    } else {
+      this.#convDirScan.hotSet.delete(cid);
     }
 
     const cached = this.#convCache.get(cid);
@@ -946,6 +998,181 @@ export class TokenMeterEngine {
     };
   }
 
+  #statConvFiles(cid, checkWal = true) {
+    const dbPath = join(this.#convDir, `${cid}.db`);
+    const dbStat = safeStat(dbPath);
+    if (!dbStat) return null;
+    const walStat = checkWal ? safeStat(`${dbPath}-wal`) : null;
+    return {
+      mtimeMs: Math.max(dbStat.mtimeMs, walStat ? walStat.mtimeMs : 0),
+      walSize: walStat ? walStat.size : 0,
+      hasWal: Boolean(walStat),
+    };
+  }
+
+  #collectOverviewCandidates(startMs, nowMs, metaMap) {
+    const windowCutoffMs = startMs - 60_000;
+    const hotCutoffMs = nowMs - HOT_WINDOW_MS;
+    const candidates = new Set();
+
+    // 1. Pre-filter candidates from conversation_summaries.db first
+    for (const [cid, info] of metaMap.entries()) {
+      if (!info.lastModifiedTime) continue;
+      const ms = Date.parse(info.lastModifiedTime);
+      if (!Number.isNaN(ms) && ms >= windowCutoffMs) {
+        candidates.add(cid);
+      }
+    }
+
+    // 2. Directory mtime fast path for conversations/ fallback scan
+    const scan = this.#convDirScan;
+    let dirChanged = false;
+    let readdirCalls = 0;
+    let statCalls = 0;
+
+    try {
+      const dirStat = safeStat(this.#convDir);
+      if (dirStat) {
+        dirChanged = !scan.initialized || dirStat.mtimeMs !== scan.dirMtimeMs;
+        if (dirChanged) {
+          readdirCalls += 1;
+          const files = readdirSync(this.#convDir);
+          const seenCids = new Set();
+          const nextWalSet = new Set();
+          const newOrWalAppeared = new Set();
+
+          for (const f of files) {
+            if (f.endsWith('.db')) {
+              const cid = f.slice(0, -3);
+              if (UUID_RE.test(cid)) {
+                seenCids.add(cid);
+                if (!scan.dbMtimeIndex.has(cid)) newOrWalAppeared.add(cid);
+              }
+            } else if (f.endsWith('.db-wal')) {
+              const cid = f.slice(0, -7);
+              if (UUID_RE.test(cid)) {
+                seenCids.add(cid);
+                nextWalSet.add(cid);
+                if (!scan.walSet.has(cid) || !scan.dbMtimeIndex.has(cid)) {
+                  newOrWalAppeared.add(cid);
+                }
+              }
+            }
+          }
+
+          for (const oldCid of scan.dbMtimeIndex.keys()) {
+            if (!seenCids.has(oldCid)) {
+              scan.dbMtimeIndex.delete(oldCid);
+              scan.hotSet.delete(oldCid);
+            }
+          }
+
+          const nextUnindexed = new Set();
+          for (const cid of seenCids) {
+            const meta = metaMap.get(cid);
+            if (!meta || !meta.lastModifiedTime) {
+              nextUnindexed.add(cid);
+            }
+          }
+
+          // First scan stats all non-summary DBs once to build dbMtimeIndex;
+          // subsequent dir-changed scans only stat newly appeared / unindexed / hot entries.
+          const toStat = new Set();
+          if (!scan.initialized) {
+            for (const cid of seenCids) {
+              if (!candidates.has(cid)) toStat.add(cid);
+            }
+          } else {
+            for (const cid of newOrWalAppeared) toStat.add(cid);
+            for (const cid of nextUnindexed) toStat.add(cid);
+            for (const cid of scan.hotSet) {
+              if (seenCids.has(cid)) toStat.add(cid);
+            }
+          }
+
+          for (const cid of toStat) {
+            if (candidates.has(cid)) continue;
+            const hasWal = nextWalSet.has(cid);
+            statCalls += hasWal ? 2 : 1;
+            const st = this.#statConvFiles(cid, hasWal);
+            if (st) {
+              scan.dbMtimeIndex.set(cid, st.mtimeMs);
+              if (st.mtimeMs >= windowCutoffMs) {
+                candidates.add(cid);
+              }
+              if (st.mtimeMs >= hotCutoffMs || st.walSize > 0) {
+                scan.hotSet.add(cid);
+              } else {
+                scan.hotSet.delete(cid);
+              }
+            }
+          }
+
+          for (const [cid, mt] of scan.dbMtimeIndex.entries()) {
+            if (mt >= windowCutoffMs) {
+              candidates.add(cid);
+            }
+          }
+
+          scan.initialized = true;
+          scan.dirMtimeMs = dirStat.mtimeMs;
+          scan.walSet = nextWalSet;
+          scan.unindexedSet = nextUnindexed;
+        } else {
+          // Fast path: dirMtimeMs unchanged -> skip readdirSync; only check hot/unindexed/window entries
+          const toCheck = new Set();
+          for (const cid of [...scan.unindexedSet]) {
+            const meta = metaMap.get(cid);
+            if (meta && meta.lastModifiedTime) {
+              scan.unindexedSet.delete(cid);
+            } else {
+              toCheck.add(cid);
+            }
+          }
+          for (const cid of scan.hotSet) toCheck.add(cid);
+          for (const [cid, mt] of scan.dbMtimeIndex.entries()) {
+            if (mt >= windowCutoffMs) toCheck.add(cid);
+          }
+
+          for (const cid of toCheck) {
+            if (candidates.has(cid)) continue;
+            statCalls += 2;
+            const st = this.#statConvFiles(cid, true);
+            if (st) {
+              scan.dbMtimeIndex.set(cid, st.mtimeMs);
+              if (st.hasWal) scan.walSet.add(cid);
+              if (st.mtimeMs >= windowCutoffMs) {
+                candidates.add(cid);
+              }
+              if (st.mtimeMs >= hotCutoffMs || st.walSize > 0) {
+                scan.hotSet.add(cid);
+              } else {
+                scan.hotSet.delete(cid);
+              }
+            } else {
+              scan.dbMtimeIndex.delete(cid);
+              scan.hotSet.delete(cid);
+              scan.unindexedSet.delete(cid);
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore readdir/stat failure
+    }
+
+    this.#lastOverviewScanStats = {
+      dirChanged,
+      readdirCalls,
+      statCalls,
+      totalIndexed: scan.dbMtimeIndex.size,
+      hotSetSize: scan.hotSet.size,
+      candidateCount: candidates.size,
+    };
+
+    return candidates;
+  }
+
   getOverview(range = 'today', force = false) {
     const normRange = range === '24h' ? '24h' : 'today';
     const nowMs = Date.now();
@@ -967,40 +1194,7 @@ export class TokenMeterEngine {
     const startSec = startMs / 1000;
 
     const { metaMap } = this.#ensureSummaryIndex();
-    const candidates = new Set();
-
-    // 1. Scan directory mtime (including WAL) to never miss brand-new sessions
-    try {
-      const files = readdirSync(this.#convDir);
-      const mtimeMap = new Map();
-      for (const f of files) {
-        if (f.endsWith('.db')) {
-          const cid = f.slice(0, -3);
-          if (!UUID_RE.test(cid)) continue;
-          const st = safeStat(join(this.#convDir, f));
-          if (st) mtimeMap.set(cid, Math.max(mtimeMap.get(cid) || 0, st.mtimeMs));
-        } else if (f.endsWith('.db-wal')) {
-          const cid = f.slice(0, -7);
-          if (!UUID_RE.test(cid)) continue;
-          const st = safeStat(join(this.#convDir, f));
-          if (st) mtimeMap.set(cid, Math.max(mtimeMap.get(cid) || 0, st.mtimeMs));
-        }
-      }
-      for (const [cid, mt] of mtimeMap.entries()) {
-        if (mt >= startMs - 60_000) candidates.add(cid);
-      }
-    } catch {
-      // ignore readdir failure
-    }
-
-    // 2. Also include any summary entry modified since startMs
-    for (const [cid, info] of metaMap.entries()) {
-      if (!info.lastModifiedTime) continue;
-      const ms = Date.parse(info.lastModifiedTime);
-      if (!Number.isNaN(ms) && ms >= startMs - 60_000) {
-        candidates.add(cid);
-      }
-    }
+    const candidates = this.#collectOverviewCandidates(startMs, nowMs, metaMap);
 
     const rootGroups = new Map();
     const byModelMap = new Map();
