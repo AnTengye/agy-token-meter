@@ -6,6 +6,14 @@
 
 ---
 
+## 效果预览
+
+<p align="center">
+  <img src="./docs/preview.jpg" alt="AGY Token Meter 实际效果图" width="760" />
+</p>
+
+---
+
 ## 核心特性
 
 - **当前会话实时监控**
@@ -165,6 +173,8 @@ agy-token-meter/
 ├── install.mjs                 # 跨平台零依赖 Node 安装 / 卸载 / 体检脚本
 ├── LICENSE                     # MIT 开源协议
 ├── README.md
+├── docs/
+│   └── preview.jpg             # README 插件实际效果图
 ├── assets/
 │   └── logo.svg                # 插件矢量图标
 ├── skills/
