@@ -28,6 +28,8 @@ description: 查看当前会话 Token 消耗、Prompt 缓存命中率、Swarm / 
 
 ```bash
 node ~/.gemini/config/plugins/token-meter/install.mjs doctor
+node ~/.gemini/config/plugins/token-meter/install.mjs doctor --check-update
+node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --check-update
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --inspect <conversationId>
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --overview today
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --overview 24h

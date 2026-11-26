@@ -11,6 +11,11 @@
     timer: null,
     lastData: null,
     overviewLoaded: false,
+    update: null,
+    updateDrawerOpen: false,
+    updateCheckingClient: false,
+    updateFollowupTimer: null,
+    updateFollowupCount: 0,
   };
 
   function syncTheme() {
@@ -39,6 +44,42 @@
     const res = await f(path, { method: 'GET' });
     if (!res.ok) throw new Error(`${path}: ${res.status}`);
     return res.json();
+  }
+
+  async function postJson(path, body = {}) {
+    const f = window.sidecar?.fetch ? window.sidecar.fetch.bind(window.sidecar) : fetch;
+    const res = await f(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    return res.json();
+  }
+
+  async function copyText(text) {
+    if (!text) return false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Fall back to execCommand below when WebView clipboard API is restricted.
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
   }
 
   function fmtNum(n) {
@@ -438,9 +479,188 @@
     });
   });
 
+  function renderUpdate(u) {
+    if (!u) return;
+    state.update = u;
+    const isBusy = state.updateCheckingClient || Boolean(u.checking);
+
+    $('update-dot').classList.toggle('hidden', !(u.hasUpdate && !u.dismissed));
+    $('update-btn').setAttribute('aria-expanded', String(state.updateDrawerOpen));
+
+    const showBar = Boolean(u.hasUpdate && !u.dismissed && !state.updateDrawerOpen);
+    $('update-bar').classList.toggle('hidden', !showBar);
+    if (showBar) {
+      $('upd-bar-text').textContent = `新版本 v${u.latestVersion} 可用`;
+    }
+
+    $('update-drawer').classList.toggle('hidden', !state.updateDrawerOpen);
+    $('upd-ver-current').textContent = `v${u.currentVersion || '-'}`;
+
+    const badge = $('upd-status-badge');
+    if (isBusy) {
+      badge.textContent = '检查中…';
+      badge.className = 'badge badge-neutral';
+    } else if (u.hasUpdate) {
+      badge.textContent = `发现 v${u.latestVersion}`;
+      badge.className = 'badge badge-swarm';
+    } else if (u.checkedAt) {
+      badge.textContent = '已是最新';
+      badge.className = 'badge badge-neutral';
+    } else {
+      badge.textContent = u.disabledByEnv ? '已由环境变量禁用' : '未检查';
+      badge.className = 'badge badge-neutral';
+    }
+
+    $('upd-available-box').classList.toggle('hidden', !u.hasUpdate);
+    if (u.hasUpdate) {
+      const notesEl = $('upd-notes');
+      notesEl.classList.toggle('hidden', !u.releaseNotes);
+      if (u.releaseNotes) notesEl.textContent = u.releaseNotes;
+
+      const isLink = Boolean(u.isSymlinkInstall);
+      $('upd-symlink-note').classList.toggle('hidden', !isLink);
+      $('upd-cmd-code').classList.toggle('hidden', isLink);
+      $('upd-copy-btn').classList.toggle('hidden', isLink);
+      if (!isLink) {
+        $('upd-cmd-code').textContent = u.updateCommand || '';
+      }
+
+      const relLink = $('upd-release-link');
+      if (u.releaseUrl) {
+        relLink.href = u.releaseUrl;
+        relLink.classList.remove('hidden');
+      } else {
+        relLink.removeAttribute('href');
+        relLink.classList.add('hidden');
+      }
+
+      $('upd-dismiss-btn').classList.toggle('hidden', Boolean(u.dismissed));
+    }
+
+    const toggle = $('upd-auto-toggle');
+    toggle.checked = Boolean(u.autoCheck);
+    toggle.disabled = Boolean(u.disabledByEnv);
+
+    const checkBtn = $('upd-check-btn');
+    checkBtn.disabled = Boolean(u.disabledByEnv) || isBusy;
+    checkBtn.textContent = isBusy ? '检查中…' : '立即检查';
+
+    const metaEl = $('upd-meta');
+    let metaText = '';
+    if (u.disabledByEnv) {
+      metaText = '已检测到 TOKEN_METER_UPDATE_CHECK=0，已禁用联网检查。';
+    } else if (u.lastError) {
+      metaText = `最近检查失败 (${u.lastError})，不影响面板使用。`;
+    } else if (u.checkedAt) {
+      const t = new Date(u.checkedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+      metaText = `上次检查 ${t} · 来源 ${u.source || 'github'}`;
+    } else if (u.autoCheck) {
+      metaText = '已开启每日自动检查，打开面板时静默检查。';
+    }
+    metaEl.textContent = metaText;
+    metaEl.classList.toggle('hidden', !metaText);
+  }
+
+  function clearUpdateFollowup() {
+    if (state.updateFollowupTimer) {
+      clearTimeout(state.updateFollowupTimer);
+      state.updateFollowupTimer = null;
+    }
+  }
+
+  function scheduleUpdateFollowup() {
+    clearUpdateFollowup();
+    if (state.updateFollowupCount >= 2) return;
+    state.updateFollowupCount += 1;
+    state.updateFollowupTimer = setTimeout(() => {
+      void loadUpdateStatus(false);
+    }, 2500);
+  }
+
+  async function loadUpdateStatus(resetFollowup = true) {
+    if (resetFollowup) {
+      state.updateFollowupCount = 0;
+      clearUpdateFollowup();
+    }
+    try {
+      const u = await getJson('/api/update');
+      renderUpdate(u);
+      if (u.checking) scheduleUpdateFollowup();
+    } catch (err) {
+      console.error('loadUpdateStatus failed:', err);
+    }
+  }
+
   $('refresh-btn').addEventListener('click', () => {
     if (state.tab === 'session') pollSession(true);
     else loadOverview(true);
+  });
+
+  $('update-btn').addEventListener('click', () => {
+    state.updateDrawerOpen = !state.updateDrawerOpen;
+    if (state.update) renderUpdate(state.update);
+    else void loadUpdateStatus(true);
+  });
+
+  $('upd-bar-open').addEventListener('click', () => {
+    state.updateDrawerOpen = true;
+    if (state.update) renderUpdate(state.update);
+  });
+
+  async function dismissCurrentUpdate() {
+    if (!state.update?.latestVersion) return;
+    try {
+      const u = await postJson('/api/update/dismiss', { version: state.update.latestVersion });
+      renderUpdate(u);
+    } catch (err) {
+      console.error('dismiss update failed:', err);
+    }
+  }
+
+  $('upd-bar-dismiss').addEventListener('click', dismissCurrentUpdate);
+  $('upd-dismiss-btn').addEventListener('click', dismissCurrentUpdate);
+
+  $('upd-check-btn').addEventListener('click', async () => {
+    state.updateCheckingClient = true;
+    if (state.update) renderUpdate(state.update);
+    try {
+      const u = await postJson('/api/update/check', { force: true });
+      state.updateCheckingClient = false;
+      renderUpdate(u);
+    } catch (err) {
+      state.updateCheckingClient = false;
+      console.error('manual update check failed:', err);
+      if (state.update) renderUpdate(state.update);
+    }
+  });
+
+  $('upd-auto-toggle').addEventListener('change', async (e) => {
+    const enabled = Boolean(e.target.checked);
+    try {
+      const u = await postJson('/api/update/settings', { autoCheck: enabled });
+      renderUpdate(u);
+      if (enabled && !u.checkedAt) {
+        state.updateCheckingClient = true;
+        renderUpdate(u);
+        const next = await postJson('/api/update/check', { force: false });
+        state.updateCheckingClient = false;
+        renderUpdate(next);
+      }
+    } catch (err) {
+      state.updateCheckingClient = false;
+      console.error('update autoCheck setting failed:', err);
+    }
+  });
+
+  $('upd-copy-btn').addEventListener('click', async () => {
+    const cmd = state.update?.updateCommand || '';
+    const ok = await copyText(cmd);
+    const btn = $('upd-copy-btn');
+    const prev = btn.textContent;
+    btn.textContent = ok ? '已复制' : '复制失败';
+    setTimeout(() => {
+      btn.textContent = prev;
+    }, 1500);
   });
 
   document.addEventListener('visibilitychange', () => {
@@ -454,4 +674,5 @@
 
   pollSession(true);
   startPolling();
+  void loadUpdateStatus(true);
 })();

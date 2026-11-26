@@ -21,8 +21,45 @@
           <button class="tab" data-tab="overview" role="tab" aria-selected="false">总览</button>
         </div>
         <button id="refresh-btn" class="icon-btn" title="立即刷新" aria-label="刷新">↻</button>
+        <button id="update-btn" class="icon-btn update-btn" title="版本与更新" aria-label="版本与更新" aria-expanded="false"><span>ⓘ</span><span id="update-dot" class="update-dot hidden"></span></button>
       </div>
     </header>
+
+    <div id="update-bar" class="update-bar hidden">
+      <span id="upd-bar-text" class="upd-bar-text"></span>
+      <div class="upd-bar-actions">
+        <button id="upd-bar-open" class="upd-link-btn" type="button">查看</button>
+        <button id="upd-bar-dismiss" class="upd-close-btn" type="button" title="忽略此版本" aria-label="忽略此版本">×</button>
+      </div>
+    </div>
+
+    <section id="update-drawer" class="update-drawer hidden" aria-label="版本与更新">
+      <div class="upd-head">
+        <div class="upd-title-wrap">
+          <span class="upd-title">Token Meter</span>
+          <span id="upd-ver-current" class="upd-ver"></span>
+        </div>
+        <span id="upd-status-badge" class="badge badge-neutral"></span>
+      </div>
+      <div id="upd-available-box" class="upd-available hidden">
+        <div id="upd-notes" class="upd-notes hidden"></div>
+        <div id="upd-symlink-note" class="upd-symlink-note hidden">当前为 --link 本地开发模式，请在本地仓库执行 git pull。</div>
+        <code id="upd-cmd-code" class="upd-cmd"></code>
+        <div class="upd-actions">
+          <button id="upd-copy-btn" class="upd-btn upd-btn-primary" type="button">复制更新命令</button>
+          <a id="upd-release-link" class="upd-btn" target="_blank" rel="noopener noreferrer">查看发布</a>
+          <button id="upd-dismiss-btn" class="upd-btn" type="button">忽略此版本</button>
+        </div>
+      </div>
+      <div class="upd-footer">
+        <label class="upd-toggle">
+          <input id="upd-auto-toggle" type="checkbox">
+          <span>每日自动检查</span>
+        </label>
+        <button id="upd-check-btn" class="upd-btn" type="button">立即检查</button>
+      </div>
+      <div id="upd-meta" class="upd-meta"></div>
+    </section>
 
     <main id="view-session" class="view">
       <div id="session-empty" class="empty hidden">

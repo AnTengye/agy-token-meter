@@ -8,19 +8,21 @@ APP_DATA_DIR="${ANTIGRAVITY_APP_DATA_DIR:-$HOME/.gemini/antigravity}"
 
 ACTION="install"
 LINK_MODE=0
+CHECK_UPDATE=0
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [install|uninstall|doctor] [--link] [--help]
+Usage: install.sh [install|uninstall|doctor] [--link] [--check-update] [--help]
 
 Commands:
-  install     Install or update Token Meter plugin into ~/.gemini/config/plugins/token-meter (default)
-  uninstall   Remove the installed plugin directory
-  doctor      Verify plugin files, node:sqlite availability, read-only engine, and Sidecar port
+  install         Install or update Token Meter plugin into ~/.gemini/config/plugins/token-meter (default)
+  uninstall       Remove the installed plugin directory
+  doctor          Verify plugin files, node:sqlite availability, read-only engine, and Sidecar port
 
 Options:
-  --link      Symlink local repository directory instead of copying (local repo only)
-  -h, --help  Show this help message
+  --link          Symlink local repository directory instead of copying (local repo only)
+  --check-update  Check remote GitHub release/manifest version during doctor
+  -h, --help      Show this help message
 EOF
 }
 
@@ -31,6 +33,9 @@ for arg in "$@"; do
       ;;
     --link)
       LINK_MODE=1
+      ;;
+    --check-update)
+      CHECK_UPDATE=1
       ;;
     -h|--help)
       usage
@@ -259,6 +264,7 @@ do_doctor() {
     "sidecars/meter/package.json"
     "sidecars/meter/sidecar.json"
     "sidecars/meter/engine.mjs"
+    "sidecars/meter/updater.mjs"
     "sidecars/meter/main.mjs"
     "sidecars/meter/index.html"
     "sidecars/meter/styles.css"
@@ -295,6 +301,23 @@ do_doctor() {
     fi
     rm -f "$DOCTOR_TMP"
     DOCTOR_TMP=""
+
+    if [ "$CHECK_UPDATE" -eq 1 ]; then
+      DOCTOR_TMP="$(mktemp "${TMPDIR:-/tmp}/agy-tm-upd.XXXXXX")"
+      if ANTIGRAVITY_APP_DATA_DIR="$APP_DATA_DIR" run_node_main "$runner" "$TARGET_DIR/sidecars/meter/main.mjs" --check-update >"$DOCTOR_TMP" 2>&1; then
+        local upd_summary
+        upd_summary="$(ANTIGRAVITY_APP_DATA_DIR="$APP_DATA_DIR" run_node_main "$runner" -e "const fs=require('fs');const u=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(u.disabledByEnv)console.log('Update check skipped (TOKEN_METER_UPDATE_CHECK=0).');else if(u.lastError)console.log('WARN:Update check unavailable ('+u.lastError+'); local version is v'+u.currentVersion+'.');else if(u.hasUpdate)console.log('Update available: v'+u.currentVersion+' -> v'+u.latestVersion+' ('+(u.releaseUrl||u.repoUrl||'')+')');else console.log('Version v'+u.currentVersion+' is up to date.');" "$DOCTOR_TMP" 2>/dev/null || true)"
+        case "$upd_summary" in
+          WARN:*) warn "${upd_summary#WARN:}" ;;
+          "") warn "Update check returned unexpected output." ;;
+          *) log "$upd_summary" ;;
+        esac
+      else
+        warn "Update check failed."
+      fi
+      rm -f "$DOCTOR_TMP"
+      DOCTOR_TMP=""
+    fi
   else
     warn "No Node.js >= 22.5 (with node:sqlite) found in PATH or Antigravity Helper."
     ok=1

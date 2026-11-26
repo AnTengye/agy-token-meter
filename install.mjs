@@ -28,19 +28,23 @@ const APP_DATA_DIR = resolve(
 const args = process.argv.slice(2);
 let action = 'install';
 let linkMode = false;
+let checkUpdate = false;
 
 for (const arg of args) {
   if (arg === 'install' || arg === 'uninstall' || arg === 'doctor') {
     action = arg;
   } else if (arg === '--link') {
     linkMode = true;
+  } else if (arg === '--check-update') {
+    checkUpdate = true;
   } else if (arg === '-h' || arg === '--help') {
     console.log(
-      'Usage: node install.mjs [install|uninstall|doctor] [--link]\n' +
-        '  install     Install or update Token Meter into ~/.gemini/config/plugins/token-meter\n' +
-        '  uninstall   Remove the installed plugin directory\n' +
-        '  doctor      Verify files, node:sqlite, read-only engine, and live Sidecar port\n' +
-        '  --link      Symlink local repository directory instead of copying'
+      'Usage: node install.mjs [install|uninstall|doctor] [--link] [--check-update]\n' +
+        '  install         Install or update Token Meter into ~/.gemini/config/plugins/token-meter\n' +
+        '  uninstall       Remove the installed plugin directory\n' +
+        '  doctor          Verify files, node:sqlite, read-only engine, and live Sidecar port\n' +
+        '  --link          Symlink local repository directory instead of copying\n' +
+        '  --check-update  Check remote GitHub release/manifest version during doctor'
     );
     process.exit(0);
   } else {
@@ -118,6 +122,7 @@ async function doDoctor() {
     join('sidecars', 'meter', 'package.json'),
     join('sidecars', 'meter', 'sidecar.json'),
     join('sidecars', 'meter', 'engine.mjs'),
+    join('sidecars', 'meter', 'updater.mjs'),
     join('sidecars', 'meter', 'main.mjs'),
     join('sidecars', 'meter', 'index.html'),
     join('sidecars', 'meter', 'styles.css'),
@@ -148,6 +153,31 @@ async function doDoctor() {
     } else {
       warn(`Engine read-only test failed: ${res.stderr || res.stdout}`);
       ok = false;
+    }
+
+    if (checkUpdate) {
+      const updRes = spawnSync(process.execPath, [mainScript, '--check-update'], {
+        encoding: 'utf8',
+        env: { ...process.env, ANTIGRAVITY_APP_DATA_DIR: APP_DATA_DIR },
+      });
+      if (updRes.status === 0) {
+        try {
+          const u = JSON.parse(updRes.stdout);
+          if (u.disabledByEnv) {
+            log('Update check skipped (TOKEN_METER_UPDATE_CHECK=0).');
+          } else if (u.lastError) {
+            warn(`Update check unavailable (${u.lastError}); local version is v${u.currentVersion}.`);
+          } else if (u.hasUpdate) {
+            log(`Update available: v${u.currentVersion} -> v${u.latestVersion} (${u.releaseUrl || u.repoUrl || ''})`);
+          } else if (u.latestVersion) {
+            log(`Version v${u.currentVersion} is up to date.`);
+          }
+        } catch {
+          warn('Update check returned unexpected output.');
+        }
+      } else {
+        warn(`Update check failed: ${updRes.stderr || updRes.stdout}`);
+      }
     }
   } catch (err) {
     warn(`node:sqlite check failed (${process.version}): ${err.message}`);

@@ -1,7 +1,8 @@
 param(
   [ValidateSet('install', 'uninstall', 'doctor')]
   [string]$Action = 'install',
-  [switch]$Link
+  [switch]$Link,
+  [switch]$CheckUpdate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -103,6 +104,7 @@ function Invoke-Doctor {
     (Join-Path (Join-Path 'sidecars' 'meter') 'package.json'),
     (Join-Path (Join-Path 'sidecars' 'meter') 'sidecar.json'),
     (Join-Path (Join-Path 'sidecars' 'meter') 'engine.mjs'),
+    (Join-Path (Join-Path 'sidecars' 'meter') 'updater.mjs'),
     (Join-Path (Join-Path 'sidecars' 'meter') 'main.mjs'),
     (Join-Path (Join-Path 'sidecars' 'meter') 'index.html'),
     (Join-Path (Join-Path 'sidecars' 'meter') 'styles.css'),
@@ -141,6 +143,29 @@ function Invoke-Doctor {
         } else {
           Write-WarnLog "Engine read-only test failed: $($out -join ' ')"
           $ok = $false
+        }
+
+        if ($CheckUpdate) {
+          try {
+            $updOut = & $nodeExe $mainScript --check-update 2>$null
+            if ($LASTEXITCODE -eq 0 -and $updOut) {
+              $u = ($updOut -join "`n") | ConvertFrom-Json
+              if ($u.disabledByEnv) {
+                Write-Log 'Update check skipped (TOKEN_METER_UPDATE_CHECK=0).'
+              } elseif ($u.lastError) {
+                Write-WarnLog "Update check unavailable ($($u.lastError)); local version is v$($u.currentVersion)."
+              } elseif ($u.hasUpdate) {
+                $targetUrl = if ($u.releaseUrl) { $u.releaseUrl } else { $u.repoUrl }
+                Write-Log "Update available: v$($u.currentVersion) -> v$($u.latestVersion) ($targetUrl)"
+              } elseif ($u.latestVersion) {
+                Write-Log "Version v$($u.currentVersion) is up to date."
+              }
+            } else {
+              Write-WarnLog 'Update check failed.'
+            }
+          } catch {
+            Write-WarnLog "Update check unavailable ($($_.Exception.Message))."
+          }
         }
       } finally {
         $env:ANTIGRAVITY_APP_DATA_DIR = $prevAppDir

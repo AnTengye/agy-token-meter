@@ -1,14 +1,20 @@
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TokenMeterEngine, UUID_RE } from './engine.mjs';
+import { getAppDataDir, TokenMeterEngine, UUID_RE } from './engine.mjs';
+import { UpdateChecker } from './updater.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const engine = new TokenMeterEngine();
+const updater = new UpdateChecker({
+  pluginDir: resolve(__dirname, '..', '..'),
+  appDataDir: getAppDataDir(),
+});
 
 // CLI self-test mode:
 //   node main.mjs --inspect <conversationId>
 //   node main.mjs --overview [today|24h]
+//   node main.mjs --check-update
 const argv = process.argv.slice(2);
 if (argv.includes('--inspect')) {
   const idx = argv.indexOf('--inspect');
@@ -38,6 +44,12 @@ if (argv.includes('--overview')) {
   const range = argv[idx + 1] === '24h' ? '24h' : 'today';
   const data = engine.getOverview(range, true);
   console.log(JSON.stringify(data, null, 2));
+  process.exit(0);
+}
+
+if (argv.includes('--check-update')) {
+  const status = await updater.checkNow({ force: true });
+  console.log(JSON.stringify(status, null, 2));
   process.exit(0);
 }
 
@@ -91,6 +103,15 @@ app.api(
     return engine.getOverview(range, force);
   },
   'GET'
+);
+
+app.api('/api/update', () => updater.getStatus({ triggerBackgroundIfDue: true }), 'GET');
+app.api('/api/update/check', (data) => updater.checkNow({ force: data?.force !== false }), 'POST');
+app.api('/api/update/settings', (data) => updater.setAutoCheck(Boolean(data?.autoCheck)), 'POST');
+app.api(
+  '/api/update/dismiss',
+  (data) => updater.dismissVersion(typeof data?.version === 'string' ? data.version : undefined),
+  'POST'
 );
 
 await app.run();

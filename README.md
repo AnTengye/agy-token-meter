@@ -17,6 +17,8 @@
   - 提供按嵌套深度统计、整组模型分布以及成员消耗排行榜；**点击成员条目可直接跳转切换至对应会话**（大树自动折叠低消耗历史节点，仅返回活跃与 Top 40 成员以防载荷膨胀）。
 - **按需全局总览（今日 / 近 24 小时）**
   - 仅在切换至「总览」Tab 或手动刷新时计算（后台**零轮询**），按步骤时间戳精确截断跨日会话，并按根会话树聚合排行。
+- **轻量可选更新提示（默认不联网）**
+  - 右上角提供 `ⓘ` 版本与更新抽屉，**默认关闭自动检查**（零外网请求）。可按需手动点击「立即检查」或开启「每日自动检查」（24 小时 TTL + `ETag` 缓存），支持复制更新命令与「忽略此版本」；可通过 `TOKEN_METER_UPDATE_CHECK=0` 硬禁用。
 - **原生主题与极简交互**
   - 通过 `preload.js` 自动同步宿主深色 / 浅色主题变量，零外部字体或 CDN 请求，适配右侧窄列面板。
 
@@ -131,8 +133,11 @@ node install.mjs          # Windows / macOS / Linux 通用（Node >= 22.5）
 ```bash
 # 健康检查（文件完整性、node:sqlite 兼容性、引擎只读测试、Sidecar 端口检测）
 node ~/.gemini/config/plugins/token-meter/install.mjs doctor
-# macOS / Linux 也可用: bash ~/.gemini/config/plugins/token-meter/install.sh doctor
-# Windows 也可用:       powershell -File "$HOME\.gemini\config\plugins\token-meter\install.ps1" -Action doctor
+# 附带联网检查是否有新版本（或直接调用 main.mjs --check-update）
+node ~/.gemini/config/plugins/token-meter/install.mjs doctor --check-update
+node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --check-update
+# macOS / Linux 也可用: bash ~/.gemini/config/plugins/token-meter/install.sh doctor [--check-update]
+# Windows 也可用:       powershell -File "$HOME\.gemini\config\plugins\token-meter\install.ps1" -Action doctor [-CheckUpdate]
 
 # 检查指定会话（含 Swarm / Teamwork 全树汇总与冷/热缓存耗时）
 node ~/.gemini/config/plugins/token-meter/sidecars/meter/main.mjs --inspect <conversationId>
@@ -170,6 +175,7 @@ agy-token-meter/
         ├── package.json
         ├── sidecar.json        # AUX_PANE Sidecar 入口声明
         ├── engine.mjs          # 零依赖增量 Protobuf/SQLite 统计引擎
+        ├── updater.mjs         # 轻量可选、基于 ETag 缓存的版本检查器
         ├── main.mjs            # Sidecar HTTP 服务与 CLI 自检入口
         ├── index.html          # 自适应侧边栏前端结构
         ├── styles.css          # 宿主深浅主题自适应样式
@@ -181,7 +187,7 @@ agy-token-meter/
 ## 隐私与安全
 
 - **100% 本地只读**：仅读取本地 `~/.gemini/antigravity/` 下的会话数据库与 `members.json` 索引，不修改任何会话数据。
-- **零遥测与零外网请求**：插件服务端与前端均不发起任何外部网络请求、不上报任何用户数据或 Token 明细。
+- **默认零外网请求 & 零遥测**：版本自动检查默认关闭；仅当用户显式点击「立即检查」、开启「每日自动检查」或执行 `--check-update` 时，Sidecar 后端才只读查询 GitHub Releases / `plugin.json` 元数据，不上报任何用户数据或 Token 明细；设置 `TOKEN_METER_UPDATE_CHECK=0` 可彻底禁止联网检查。
 
 ---
 
